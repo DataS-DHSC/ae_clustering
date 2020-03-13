@@ -1,44 +1,39 @@
-source('load_data.R')
+source('load_data.R')           # Get full dataframes
 
-### Create timeseries
+library(ggplot2)                # For plotting results
+source('cluster_functions.R')   # Clustering and data-prep functions
+
+### Create timeseries for this script
 tot_att <- ae %>%
   dplyr::select(month, code, region, total_attendances) %>%
   dplyr::arrange(code, month) %>%
   dplyr::mutate(mon_name = paste0('mon', month),
-                total_attendances = total_attendances + 0.5) %>%
+                total_attendances = log(total_attendances + 0.5)) %>%
+  dplyr::group_by(code, region) %>%
+  dplyr::mutate(mean_ts = mean(total_attendances, na.rm = T),
+                sd_ts = sd(total_attendances, na.rm = T)) %>%
+  dplyr::mutate(tot_att_scaled = (total_attendances - mean_ts) / sd_ts) %>%
   tidyr::pivot_wider(id_cols = code:region, 
                      names_from = month, 
-                     values_from = total_attendances) %>%
-  na.omit() %>%
-  dplyr::mutate_if(is.numeric, log) %>%
-  dplyr::mutate_if(is.numeric, scale)
+                     values_from = tot_att_scaled) %>%
+  na.omit()
 
-library(cluster)
-library(clusterCrit)
-library(ggplot2)
-library(data.table)
+# Create raw data matrix and set number of clusters to try
 att_raw <- as.matrix(tot_att[, 3:ncol(tot_att)])
-clusterings <- lapply(c(2:7), function(x) pam(att_raw, x))
-DB_values <- sapply(seq_along(clusterings), function(x) 
-  intCriteria(att_raw, as.integer(clusterings[[x]]$clustering),
-              c("Davies_Bouldin")))
-ggplot(data.frame(Clusters = 2:7, DBindex = unlist(DB_values)),
-       aes(Clusters, DBindex)) +
-  geom_line(size = 1) +
-  geom_point(size = 3) +
-  theme_bw()
+try_clusters <- c(3:10)
 
-data_plot <- data.table(melt(data.table(class = as.factor(clusterings[[3]]$clustering),
-                                        tot_att)))
-data_plot[, Time := as.Date(variable, origin = '1970-01-01')]
-data_plot[, ID := rep(1:nrow(att_raw), ncol(att_raw))]
+# Run clustering and select optimal number of clusters
+clust <- cluster_select(att_raw, try_clusters)
 
-# prepare medoids
-centers <- data.table(melt(data.table(clusterings[[3]]$medoids,
-                                      class = 1:4),
-                           id.vars = 'class'))
-setnames(centers, c('class', "variable", "value"), c('class', "Time", "value"))
-centers[, Time := as.Date(Time, origin = '1970-01-01')][, `:=`(ID = value)]
+# Prepare data for plotting the clusters
+data_plot <- prepare_data(tot_att, 
+                          clust$clusterings, 
+                          clust$num_clusters_index)
+
+# prepare medoids of each cluster
+centers <- prepare_centers(clust$clusterings, 
+                           clust$num_clusters_index, 
+                           clust$num_clusters)
 
 # plot the results
 ggplot(data_plot, aes(Time, value, group = ID)) +
