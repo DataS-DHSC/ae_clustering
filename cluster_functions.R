@@ -22,7 +22,7 @@ cluster_select <- function(data, try_clusters){
               num_clusters = num_clusters))
 }
 
-prepare_data <- function(data, clusterings, num_clusters_index){
+prepare_data <- function(data, raw_data, clusterings, num_clusters_index){
   data_plot_t <- data.frame(class = as.factor(clusterings[[num_clusters_index]]$clustering),
                             data) %>%
     tidyr::pivot_longer(cols = starts_with('X'),
@@ -30,7 +30,7 @@ prepare_data <- function(data, clusterings, num_clusters_index){
                         values_to = 'value') %>%
     dplyr::arrange(variable) %>%
     dplyr::mutate(Time = gsub('X', '', variable),
-                  ID = rep(1:nrow(att_raw), ncol(att_raw))) %>%
+                  ID = rep(1:nrow(raw_data), ncol(raw_data))) %>%
     dplyr::mutate(Time = as.Date(Time, format = '%Y.%m.%d'))
   return(data_plot_t)
 }
