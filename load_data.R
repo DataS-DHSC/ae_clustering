@@ -53,4 +53,4 @@ for(i in 1:nrow(data_df)){
   }, error=function(e){})
 }
 
-  
+write.csv(ae, 'combined_ae_data.csv', row.names = FALSE)

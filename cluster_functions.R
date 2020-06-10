@@ -4,16 +4,16 @@ library(clusterCrit)
 cluster_select <- function(data, try_clusters){
   ### Decide on number of clusters: run between 2 and 7
   clusterings <- lapply(try_clusters, function(x) pam(data, x))
-  DB_values <- sapply(seq_along(clusterings), function(x) 
+  sil_values <- sapply(seq_along(clusterings), function(x) 
     intCriteria(data, as.integer(clusterings[[x]]$clustering),
-                c("Davies_Bouldin")))
-  plot <- ggplot(data.frame(Clusters = try_clusters, DBindex = unlist(DB_values)),
-         aes(Clusters, DBindex)) +
+                c("Silhouette")))
+  plot <- ggplot(data.frame(Clusters = try_clusters, silhouette = unlist(sil_values)),
+         aes(Clusters, silhouette)) +
     geom_line(size = 1) +
     geom_point(size = 3) +
     theme_bw()
   
-  num_clusters_index <- which.min(unlist(DB_values))
+  num_clusters_index <- which.max(unlist(sil_values))
   num_clusters <- try_clusters[num_clusters_index]
   
   return(list(plot = plot,
