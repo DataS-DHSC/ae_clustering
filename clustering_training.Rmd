@@ -1,0 +1,311 @@
+---
+title: "Time-series clustering"
+author: "Martine Wauben"
+date: "25/03/2020"
+output: 
+  slidy_presentation:
+    highlight: pygments
+---
+
+```{r setup, include=FALSE}
+library(magrittr)
+library(polite)
+library(dplyr)
+library(tidyr)
+library(rvest)
+library(readr)
+library(purrr)
+library(cluster)
+library(clusterCrit)
+library(ggplot2)
+source('cluster_functions.R') 
+ae <- readr::read_csv('combined_ae_data.csv')
+wip_att <- ae %>%
+  dplyr::select(month, code, region, total_attendances) %>%
+  dplyr::arrange(code, month) %>%
+  dplyr::mutate(mon_name = paste0('mon', month),
+                tot_att_log = log(total_attendances + 0.00001)) %>%
+  dplyr::group_by(code, region) %>%
+  dplyr::mutate(mean_ts = mean(total_attendances, na.rm = T),
+                sd_ts = sd(total_attendances, na.rm = T),
+                mean_ts_log = mean(tot_att_log, na.rm = T),
+                sd_ts_log = sd(tot_att_log, na.rm = T)) %>%
+  dplyr::mutate(tot_att_scaled = (total_attendances - mean_ts) / sd_ts,
+                tot_att_log_scaled = (tot_att_log - mean_ts_log) / sd_ts_log)
+
+tot_att <- wip_att %>%
+  tidyr::pivot_wider(id_cols = code:region, 
+                     names_from = month, 
+                     values_from = total_attendances) %>%
+  na.omit()
+
+tot_att_sc <- wip_att %>%
+  tidyr::pivot_wider(id_cols = code:region, 
+                     names_from = month, 
+                     values_from = tot_att_scaled) %>%
+  na.omit()
+```
+
+## A&E attendance
+
+The average across all trusts shows a familiar pattern:
+
+```{r ae avg, echo = FALSE, warning = FALSE}
+ae %>%
+  dplyr::group_by(month) %>%
+  dplyr::summarise_if(is.numeric, mean, na.rm= T) %>%
+  dplyr::ungroup() %>%
+  ggplot(aes(x = month, y = total_attendances))+
+  geom_line()+
+  labs(title = 'Total A&E attendances: averagea cross all trusts',
+       caption = 'NHS England A&E Attendances and Emergency Admissions 2019/20 data',
+       x = '',
+       y = 'Total attendances')+
+  theme_minimal()
+```
+
+## But much more detail on a local level!
+
+```{r ae all, echo = FALSE, warning = FALSE}
+ae %>%
+  dplyr::group_by(name, month) %>%
+  dplyr::summarise_if(is.numeric, sum, na.rm= T) %>%
+  dplyr::ungroup() %>%
+  ggplot(aes(x = month, y = total_attendances, group = name))+
+  geom_line(alpha = 0.2)+
+  labs(title = 'Total A&E attendances by trust',
+       caption = 'NHS England A&E Attendances and Emergency Admissions 2019/20 data',
+       x = '',
+       y = 'Total attendances')+
+  theme_minimal()
+```
+
+## What can Data Science do?
+
+Research question:
+
+**Are there groups of NHS trusts that see distinct seasonal patterns of attendances throughout the year?**
+
+
+Caveat: Without having to do it manually/anecdotally!
+
+## Clustering
+
+A type of **unsupervised** learning: clustering can find patterns in data where the 'true' grouping is unknown. It does this by finding groups of datapoints that are less far removed from each other in *vector space* (ie. across all variables). 
+
+In this example, I will use K-Medoids, which works like this:
+
+![](https://miro.medium.com/max/960/1*umzqxI8Oeje8nU5EItF5dw.gif)
+
+## Result
+
+Automatically finds groups of Trusts with similar peaks and troughs. 
+
+```{r final clusters, echo = FALSE}
+# Create raw data matrix and set number of clusters to try
+att_raw_sc <- as.matrix(tot_att_sc[, 3:ncol(tot_att_sc)])
+try_clusters <- c(3:10)
+
+# Run clustering and select optimal number of clusters
+clust_sc <- cluster_select(att_raw_sc, try_clusters)
+
+# Prepare data for plotting the clusters
+data_plot_sc <- prepare_data(tot_att_sc, 
+                          att_raw_sc,
+                          clust_sc$clusterings, 
+                          clust_sc$num_clusters_index)
+
+# prepare medoids of each cluster
+centers_sc <- prepare_centers(clust_sc$clusterings, 
+                           clust_sc$num_clusters_index, 
+                           clust_sc$num_clusters)
+
+# plot the results
+ggplot(data_plot_sc, aes(Time, value, group = ID)) +
+  facet_wrap(~class, ncol = 2, scales = "free_y") +
+  geom_line(color = "grey10", alpha = 0.65) +
+  geom_line(data = centers_sc, aes(Time, value, group= NULL), 
+            color = "firebrick1", alpha = 0.80, size = 1.2) +
+  labs(x = "Time", y = "Total A&E attendances (scaled)") +
+  theme_bw()
+```
+
+## How is it done? 
+
+![](https://www.researchgate.net/profile/Jake_Kaupp/publication/315969248/figure/fig2/AS:613978556350465@1523395303039/Data-Science-Workflow-githubcom-rstudio-RStartHere.png)
+
+- Import data
+- Combine, pre-process, and transform data
+- Set algorithm parameters
+- Cluster timeseries into groups
+- Interpret clusters
+
+With a massive thank you to NHS England's statistics teams, who prepare the monthly tables!
+
+## NHS England data
+
+Structured, but requires pre-processing.
+
+![](https://i.ibb.co/6HrMWKJ/ae-data.png)
+
+## Timeseries per Trust code
+
+Final product: April 2019 to February 2020
+
+```{r data, echo = FALSE}
+knitr::kable(tot_att[1:10, 1:5], format = 'html')
+```
+
+
+## How many clusters?
+
+K-Medoids is very sensitive to this simple parameter: how many clusters are we looking for?
+
+It will 'find' that many clusters, even if fewer or more would be more optimal. It is therefore prone to getting stuck in local optima if you do not set this parameter right. 
+
+![](https://miro.medium.com/max/1280/1*eqLUPz6vkWmomJKJ9mX2SA.gif)
+
+## Deciding on the number
+
+The Silhouette score calculates how similar an object is to its own cluster (cohesion) compared to other clusters (separation). Higher scores are better!
+
+```{r cluster_try, echo = FALSE}
+# Create raw data matrix and set number of clusters to try
+att_raw <- as.matrix(tot_att[, 3:ncol(tot_att)])
+try_clusters <- c(3:10)
+
+# Run clustering and select optimal number of clusters
+clust <- cluster_select(att_raw, try_clusters)
+
+clust$plot
+```
+
+## Interpreting the clusters
+
+```{r clusters, echo = FALSE}
+# Prepare data for plotting the clusters
+data_plot <- prepare_data(tot_att, 
+                          att_raw,
+                          clust$clusterings, 
+                          clust$num_clusters_index)
+
+# prepare medoids of each cluster
+centers <- prepare_centers(clust$clusterings, 
+                           clust$num_clusters_index, 
+                           clust$num_clusters)
+
+# plot the results
+ggplot(data_plot, aes(Time, value, group = ID)) +
+  facet_wrap(~class, ncol = 2, scales = "free_y") +
+  geom_line(color = "grey10", alpha = 0.65) +
+  geom_line(data = centers, aes(Time, value, group= NULL), 
+            color = "firebrick1", alpha = 0.80, size = 1.2) +
+  labs(x = "Time", y = "Total A&E attendances") +
+  theme_bw()
+```
+
+...a mess! Notice how different the y-axes are...
+
+
+## Skewed data messes with distance metrics
+
+```{r skew, echo = FALSE}
+hist_vec <- tot_att %>%
+       tidyr::pivot_longer(cols = contains('-'),
+                           values_to = 'attendances') %>%
+  .$attendances
+hist(hist_vec, main = 'Histogram of attendances per month across NHS Trusts', xlab = 'Attendances')
+```
+
+## We're interested in peaks and troughs
+
+Relative to that trust's general size!
+
+```{r peaks, echo = FALSE}
+sample <- c("Loughborough Urgent Care Centre", "Whitstable Medical Practice", 
+            "Harold Wood Wic", "Bolton NHS Foundation Trust")
+ae %>%
+  dplyr::group_by(name, month) %>%
+  dplyr::summarise_if(is.numeric, sum, na.rm= T) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(name %in% sample) %>%
+  ggplot(aes(x = month, y = total_attendances, colour = name))+
+  geom_line()+
+  labs(title = 'Total A&E attendances by trust',
+       caption = 'NHS England A&E Attendances and Emergency Admissions 2019/20 data',
+       x = '',
+       y = 'Total attendances')+
+  theme_minimal()
+```
+
+
+## Scaled data
+
+```{r scaled, echo = FALSE}
+sc_vec <- tot_att_sc %>%
+       tidyr::pivot_longer(cols = contains('-'),
+                           values_to = 'attendances') %>%
+  .$attendances
+hist(sc_vec, main = 'Histogram of scaled attendances', xlab = 'Attendances (mean 0, sd 1)')
+```
+
+
+## Post-scaling data
+
+```{r ae scaled, echo = FALSE, warning = FALSE}
+tot_att_sc %>%
+  pivot_longer(cols = contains('-'),
+               names_to = 'month',
+               values_to = 'tot_att_sc') %>%
+  ggplot(aes(x = month, y = tot_att_sc, group = code))+
+  geom_line(alpha = 0.2)+
+  labs(title = 'Scaled A&E attendances by trust',
+       caption = 'NHS England A&E Attendances and Emergency Admissions 2019/20 data',
+       x = '',
+       y = 'Total attendances (scaled)')+
+  theme_minimal()
+```
+
+## Decide number of clusters with scaled data
+
+```{r scaled clusters, echo = FALSE}
+# Scaled optimal no of clusters
+clust_sc$plot
+```
+
+## Interpret these clusters
+
+```{r plot clusters, echo = FALSE}
+ggplot(data_plot_sc, aes(Time, value, group = ID)) +
+  facet_wrap(~class, ncol = 2, scales = "free_y") +
+  geom_line(color = "grey10", alpha = 0.65) +
+  geom_line(data = centers_sc, aes(Time, value, group= NULL), 
+            color = "firebrick1", alpha = 0.80, size = 1.2) +
+  labs(x = "Time", y = "Total A&E attendances (scaled)") +
+  theme_bw()
+```
+
+## Looking inside cluster 3
+
+```{r cluster 3, echo = FALSE}
+clust_3 <- data_plot_sc[data_plot_sc$class == 3, 'code']
+small_sample <- sample(clust_3$code, 5)
+clust_plot <- ae %>%
+  dplyr::filter(code %in% clust_3$code) %>%
+  dplyr::group_by(name, code, month) %>%
+  dplyr::summarise_if(is.numeric, sum, na.rm= T) %>%
+  dplyr::ungroup() 
+ggplot(clust_plot, aes(x = month, y = total_attendances, group = name))+
+  geom_line(alpha = 0.2)+
+  geom_line(data = clust_plot %>% dplyr::filter(code %in% small_sample), aes(x = month, y = total_attendances, colour = name))+
+  labs(title = 'Total A&E attendances by trust',
+       caption = 'NHS England A&E Attendances and Emergency Admissions 2019/20 data',
+       x = '',
+       y = 'Total attendances',
+       colour = '')+
+  theme_minimal()+ 
+  theme(legend.position="bottom")+
+  guides(colour=guide_legend(nrow=3,byrow=TRUE))
+```
+
+
